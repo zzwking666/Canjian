@@ -1,0 +1,233 @@
+from Mt.MDialog import MDialog
+from Mt.MPushButton import MPushButton
+from Mt.MLabel import MLabel
+from Mt.MApplication import MApplication
+from MaixCam.I18n import tr, _TRANSLATIONS
+from maix import image
+
+
+def _measure_text(text):
+    try:
+        size = image.string_size(text)
+        return size.width(), size.height()
+    except Exception:
+        return len(text) * 8, 16
+
+
+def _text_all_languages(key):
+    """取某 i18n key 在全部语言下的文本（只读翻译表，不切换当前语言）。"""
+    return [t[key] for t in _TRANSLATIONS.values() if key in t]
+
+class NumberKeyBoard(MDialog):
+    """
+    数字键盘对话框（继承 MDialog）。
+    用法：
+        kb = NumberKeyBoard.create_centered(max_len=6)
+        res = kb.exec()   # 模态，返回字符串或 None
+    或非模态：
+        kb.show()
+        v = kb.getValue()
+    """
+
+    @classmethod
+    def create_centered(cls, max_len=6, password=False):
+        """按屏幕尺寸创建居中的大号键盘（约占屏幕 75% 宽、92% 高）。"""
+        app = MApplication.instance()
+        sw = getattr(app, "img_width", 0) or 640
+        sh = getattr(app, "img_height", 0) or 480
+        w = min(int(sw * 0.75), 480)
+        h = min(int(sh * 0.92), 440)
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        return cls(x, y, w, h, max_len=max_len, password=password)
+
+    def __init__(self, x, y, w, h, parent=None, max_len=6, password=False):
+        super().__init__(x, y, w, h, parent)
+        self.max_len = max_len
+        self.password = password  # 密码模式：显示区用 * 掩码
+        self._buf = ""
+        self._margin = 14
+        self._gap = 10
+        self.result = None
+
+        # 改动：增加顶部“行高”，确保顶部的取消按钮和显示区域有足够高度
+        # 使用对话框高度的一个比例或最小值作为显示区高度
+        self.display_h = max(40, int(h * 0.18))
+
+        # 按钮区列数和行数（1..9 三行 + 最后一行）
+        self.cols = 3
+        self.rows = 4
+
+        # 先按宽度计算按钮宽度
+        total_gap_w = (self.cols - 1) * self._gap
+        btn_w = max(10, (self.w - 2 * self._margin - total_gap_w) // self.cols)
+
+        # 按高度计算按钮高度，确保不超出 dialog 高度
+        # 注意：显示区与按钮区之间还有一个 _gap，需一并扣除
+        total_gap_h = (self.rows - 1) * self._gap
+        avail_h_for_buttons = self.h - 2 * self._margin - self.display_h - self._gap
+        # 如果可用高度过小，尝试压缩 display_h，但保留一个较大最小值
+        if avail_h_for_buttons <= 0:
+            self.display_h = max(28, self.h - 2 * self._margin - (self.rows * 20 + total_gap_h))
+            avail_h_for_buttons = self.h - 2 * self._margin - self.display_h - self._gap
+
+        btn_h_candidate = (avail_h_for_buttons - total_gap_h) // self.rows
+        if btn_h_candidate <= 0:
+            # 兜底，保证至少 12 像素
+            btn_h = max(12, min(btn_w, (self.h - 2 * self._margin - total_gap_h) // self.rows))
+        else:
+            # 按钮高度不超过宽度（保持方形或接近）
+            btn_h = min(btn_w, btn_h_candidate)
+
+        # 如果按钮高度太小且 display_h 很大，压缩 display_h 以腾出空间
+        required_buttons_h = self.rows * btn_h + total_gap_h
+        if required_buttons_h > (self.h - 2 * self._margin - 16):
+            self.display_h = max(24, self.h - 2 * self._margin - required_buttons_h)
+            avail_h_for_buttons = self.h - 2 * self._margin - self.display_h - self._gap
+            btn_h_candidate = (avail_h_for_buttons - total_gap_h) // self.rows
+            if btn_h_candidate > 0:
+                btn_h = min(btn_w, btn_h_candidate)
+
+        # 显示标签（放在 dialog 顶部）
+        disp_x = self.x + self._margin
+        disp_y = self.y + self._margin
+        disp_w = self.w - 2 * self._margin
+        self.display_label = MLabel(self._buf, disp_x, disp_y, disp_w, self.display_h)
+        self.display_label.text_scale_max = 2.0  # 显示区文字放大，便于远距离读数
+        self.addWidget(self.display_label)
+        if self.password:
+            # 密码模式下显示区先给提示文本，输入后被掩码替代
+            self.display_label.setText(tr("enter_password"))
+
+        # 生成数字键 1..9
+        start_y = disp_y + self.display_h + self._gap
+        nums = ["1","2","3","4","5","6","7","8","9"]
+        for idx, ch in enumerate(nums):
+            col = idx % self.cols
+            row = idx // self.cols
+            bx = self.x + self._margin + col * (btn_w + self._gap)
+            by = start_y + row * (btn_h + self._gap)
+            b = MPushButton(ch, bx, by, btn_w, btn_h, parent=self)
+            b.text_scale_max = 2.0  # 大按钮上数字放大显示
+            b.clicked.connect(self._make_digit_handler(ch))
+            self.addWidget(b)
+
+        # 第四行：OK, 0, Back
+        row4_y = start_y + 3 * (btn_h + self._gap)
+        # 防止超出底部：如果 row4_y + btn_h 超出，则上移 start_y
+        overflow = (row4_y + btn_h) - (self.y + self.h - self._margin)
+        if overflow > 0:
+            start_y -= overflow
+            row4_y -= overflow
+            row4_y = min(row4_y, self.y + self.h - self._margin - btn_h)
+
+        # OK 按钮（左）
+        ok_w = btn_w
+        ok_x = self.x + self._margin
+        ok_btn = MPushButton(tr("ok"), ok_x, row4_y, ok_w, btn_h, parent=self)
+        ok_btn.bg_color = image.Color.from_rgb(76, 175, 80)   # 绿色：确认
+        ok_btn.text_color = image.Color.from_rgb(255, 255, 255)
+        ok_btn.border_color = image.Color.from_rgb(56, 142, 60)
+        ok_btn.text_scale_max = 1.6
+        ok_btn.clicked.connect(self._on_ok)
+        self.addWidget(ok_btn)
+        # 0 按钮（中）
+        zero_x = self.x + self._margin + 1 * (btn_w + self._gap)
+        zero_btn = MPushButton("0", zero_x, row4_y, btn_w, btn_h, parent=self)
+        zero_btn.text_scale_max = 2.0
+        zero_btn.clicked.connect(self._make_digit_handler("0"))
+        self.addWidget(zero_btn)
+        # Back 按钮（右）
+        back_x = self.x + self._margin + 2 * (btn_w + self._gap)
+        back_btn = MPushButton("←", back_x, row4_y, btn_w, btn_h, parent=self)
+        back_btn.text_scale_max = 2.0
+        back_btn.clicked.connect(self._on_back)
+        self.addWidget(back_btn)
+
+        # 右上角放置取消按钮，宽度按三语"取消"文本最宽者自适应（英文 Cancel 较宽），
+        # 调整尺寸以适配放大的顶部行高
+        cancel_texts = _text_all_languages("cancel")
+        try:
+            c_w = max(80, max(_measure_text(t)[0] for t in cancel_texts) + 24)
+        except Exception:
+            c_w = 80
+        c_w = min(c_w, self.w // 2)
+        # 让取消按钮高度接近按钮高度或不小于一个较大的最小值
+        c_h = max(28, min(btn_h, int(self.display_h * 0.7)))
+        c_x = self.x + self.w - c_w - self._margin
+        # 将取消按钮垂直居中放到显示区内
+        c_y = disp_y + max(0, (self.display_h - c_h) // 2)
+        cancel_btn = MPushButton(tr("cancel"), c_x, c_y, c_w, c_h, parent=self)
+        cancel_btn.bg_color = image.Color.from_rgb(229, 115, 115)  # 浅红：取消
+        cancel_btn.text_color = image.Color.from_rgb(255, 255, 255)
+        cancel_btn.border_color = image.Color.from_rgb(198, 80, 80)
+        cancel_btn.clicked.connect(self._on_cancel)
+        self.addWidget(cancel_btn)
+
+    def _make_digit_handler(self, ch):
+        def handler():
+            if len(self._buf) < self.max_len:
+                self._buf += ch
+                self._update_display()
+        return handler
+
+    def _on_back(self):
+        if self._buf:
+            self._buf = self._buf[:-1]
+            self._update_display()
+
+    def _on_ok(self):
+        # 设置结果并关闭（调用父类 accept）
+        self.value = self._buf
+        self.accept()
+
+    def _on_cancel(self):
+        self.reject()
+
+    def _update_display(self):
+        # 更新标签文本；密码模式用 * 掩码，空输入显示提示
+        if self.password:
+            self.display_label.setText("*" * len(self._buf) if self._buf else tr("enter_password"))
+        else:
+            self.display_label.setText(self._buf if self._buf else "")
+
+    def getRawText(self):
+        """
+        返回原始输入字符串（不做 int 转换，保留前导零），供密码比对使用。
+        空输入或 None 返回 None。
+        """
+        v = getattr(self, 'value', None)
+        if v is None:
+            v = self._buf
+        if v is None:
+            return None
+        s = str(v)
+        return s if s != "" else None
+
+    def getValue(self):
+        # 优先使用已确认的 self.value，其次使用输入缓冲 self._buf
+        v = getattr(self, 'value', None)
+        if v is None:
+            v = self._buf
+
+        # 空字符串或 None 返回 None 表示无值
+        if v is None:
+            return None
+        s = str(v).strip()
+        if s == "":
+            return None
+
+        # 尝试转换为 int；若直接 int 失败，再尝试 float->int；都失败返回 None
+        try:
+            return int(s)
+        except (ValueError, TypeError):
+            try:
+                return int(float(s))
+            except Exception:
+                return None
+
+    # 可选：清除当前缓冲与结果
+    def clearValue(self):
+        self._buf = ""
+        self.value = None
+        self._update_display()

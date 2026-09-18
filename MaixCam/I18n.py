@@ -50,6 +50,8 @@ _TRANSLATIONS = {
         "system_params": "系统参数",
         "enter_password": "请输入密码",
         "wrong_password": "密码错误",
+        "big_dou_io": "大斗IO控制",
+        "small_dou_io": "小斗IO控制",
     },
     "en": {
         "menu": "Menu",
@@ -97,6 +99,8 @@ _TRANSLATIONS = {
         "system_params": "System",
         "enter_password": "Enter Password",
         "wrong_password": "Wrong Password",
+        "big_dou_io": "Big Dou IO",
+        "small_dou_io": "Small Dou IO",
     },
     "vi": {
         "menu": "Trình đơn",
@@ -144,6 +148,8 @@ _TRANSLATIONS = {
         "system_params": "Hệ thống",
         "enter_password": "Nhập mật khẩu",
         "wrong_password": "Sai mật khẩu",
+        "big_dou_io": "IO vợt to",
+        "small_dou_io": "IO vợt nhỏ",
     },
 }
 

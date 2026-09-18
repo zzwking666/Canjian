@@ -446,7 +446,62 @@ class MaixCamMainWindow(MMainWindow):
             tr("delay_percent"), str(cfg.yanshichufashijian), tr("unit_percent"), self.on_yanshichufashijian_clicked,
             btn_h=76)
 
+        # 大斗/小斗 IO 手动控制按钮：按一下置 True，再按一下置 False；
+        # True 时按钮绿色，False 时按钮红色（状态以 GPIO 实际电平为准）
+        io_btn_w = 200
+        io_btn_h = 60
+        io_btn_y = col_y + 48 + 8 + 76 + 6 + 30 + 24  # 三列参数（标签+按钮+单位）下方
+        io_col_xs = self._col_positions(self.configSysContainer.w, 2, io_btn_w)
+        self.btn_dadou_io = MPushButton(
+            text=tr("big_dou_io"),
+            x=io_col_xs[0], y=io_btn_y, w=io_btn_w, h=io_btn_h
+        )
+        self.btn_dadou_io.clicked.connect(self.on_dadou_io_clicked)
+        self.configSysContainer.add_child(self.btn_dadou_io)
+
+        self.btn_xiaodou_io = MPushButton(
+            text=tr("small_dou_io"),
+            x=io_col_xs[1], y=io_btn_y, w=io_btn_w, h=io_btn_h
+        )
+        self.btn_xiaodou_io.clicked.connect(self.on_xiaodou_io_clicked)
+        self.configSysContainer.add_child(self.btn_xiaodou_io)
+
+        self._refresh_dou_io_buttons()
+
         self.tabWidget.addTab(self.configSysContainer, tr("system_params"))
+
+    def _refresh_dou_io_buttons(self):
+        """根据 GPIO 实际电平刷新大斗/小斗 IO 按钮配色（True=绿，False=红）。"""
+        modules = Modules.instance()
+        # 斗打开(True)对应低电平；读取不到（如仿真环境）按 False 处理
+        dadou = getattr(modules, "outGPIODadou", None)
+        xiaodou = getattr(modules, "outGPIOXiaodou", None)
+        self._update_dou_io_button(self.btn_dadou_io, dadou.is_low() if dadou else False)
+        self._update_dou_io_button(self.btn_xiaodou_io, xiaodou.is_low() if xiaodou else False)
+
+    @staticmethod
+    def _update_dou_io_button(btn, on):
+        """IO 按钮配色：on=True 绿色，on=False 红色。"""
+        if on:
+            btn.bg_color = image.Color.from_rgb(76, 175, 80)
+            btn.text_color = image.Color.from_rgb(255, 255, 255)
+            btn.border_color = image.Color.from_rgb(56, 142, 60)
+        else:
+            btn.bg_color = image.Color.from_rgb(229, 57, 53)
+            btn.text_color = image.Color.from_rgb(255, 255, 255)
+            btn.border_color = image.Color.from_rgb(183, 28, 28)
+
+    def on_dadou_io_clicked(self):
+        """大斗 IO 手动翻转：True<->False，并同步按钮颜色。"""
+        new_status = not Modules.instance().outGPIODadou.is_low()
+        setDaDouStatus(new_status)
+        self._update_dou_io_button(self.btn_dadou_io, new_status)
+
+    def on_xiaodou_io_clicked(self):
+        """小斗 IO 手动翻转：True<->False，并同步按钮颜色。"""
+        new_status = not Modules.instance().outGPIOXiaodou.is_low()
+        setXiaoDouStatus(new_status)
+        self._update_dou_io_button(self.btn_xiaodou_io, new_status)
 
     def _update_ui_texts(self):
         """根据当前语言刷新所有已创建控件的文本。"""
@@ -503,6 +558,8 @@ class MaixCamMainWindow(MMainWindow):
         self.lb_yanshichufashijian.setText(tr("delay_percent"))
         self.btn_yanshichufashijian.setText(str(cfg.yanshichufashijian))
         self.lb_yanshichufashijianUnit.setText(tr("unit_percent"))
+        self.btn_dadou_io.setText(tr("big_dou_io"))
+        self.btn_xiaodou_io.setText(tr("small_dou_io"))
 
     def on_language_clicked(self):
         """语言切换按钮槽函数。"""
@@ -560,6 +617,8 @@ class MaixCamMainWindow(MMainWindow):
             self._last_menu_btn = self.btn_config_sys
             self.tabWidget.setCurrentIndex(self.TAB_CONFIG_SYS)
             RunningInfo.instance().run_mode = RunMode.STOP
+            # 进入时按 GPIO 实际电平刷新 IO 按钮颜色（退出菜单时电平会被复位）
+            self._refresh_dou_io_buttons()
         else:
             self._show_wrong_password_dialog()
 
